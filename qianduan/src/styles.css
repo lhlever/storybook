@@ -440,11 +440,12 @@ body {
 }
 
 .display-card--comic {
-  padding: 0;
+  padding: 8px 8px 10px;
   overflow: hidden;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
 }
 
 .display-card-image {
@@ -452,6 +453,15 @@ body {
   height: auto;
   object-fit: contain;
   display: block;
+}
+
+.display-card-word {
+  font-size: 12px;
+  line-height: 1.4;
+  margin-bottom: 6px;
+  color: #4b3414;
+  text-align: left;
+  word-break: break-word;
 }
 
 .display-card-title {
