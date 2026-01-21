@@ -8,17 +8,15 @@ from langgraph.graph import StateGraph, END
 import operator
 from memory import MemorySystem
 from tools import (
-    generate_comic_outline,
+    generate_frames_from_llm,
     design_characters,
-    generate_story_segments,
-    generate_image_prompts,
     generate_images_from_prompts
 )
 
 
 class AgentState(TypedDict):
     """
-    Agent 的状态定义 - 漫画生成流程
+    Agent 的状态定义 - 漫画生成流程（使用 LLM_conversion）
     使用 TypedDict 确保类型安全
     """
     # 基础信息
@@ -29,12 +27,13 @@ class AgentState(TypedDict):
     current_step: str
     completed_steps: Annotated[list, operator.add]
 
-    # 创作内容（漫画）
-    comic_outline: dict        # 漫画大纲
-    characters: list           # 角色设计列表
-    story_segments: list       # 分段故事文本
-    image_prompts: list        # 图片提示词列表
-    images: list               # 生成的图片列表
+    # 创作内容（漫画）- 新流程
+    character_settings: str    # 角色设定（从LLM返回）
+    main_story: str            # 故事概要（从LLM返回）
+    characters: list           # 角色设计列表（详细设计）
+    story_segments: list       # 分段故事文本（9帧）
+    image_prompts: list        # 图片提示词列表（9帧）
+    images: list               # 生成的图片列表（9帧）
 
     # 控制流
     next_action: str
@@ -49,29 +48,25 @@ class StoryCreationAgent:
         self.graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph:
-        """构建 LangGraph 状态图 - 漫画生成流程"""
+        """构建 LangGraph 状态图 - 新漫画生成流程（使用 LLM_conversion）"""
 
         # 创建状态图
         workflow = StateGraph(AgentState)
 
-        # 添加节点（漫画生成流程）
+        # 添加节点（新流程：LLM生成 → 角色设计 → 文生图）
         workflow.add_node("init", self.initialize_node)
-        workflow.add_node("generate_comic_outline", self.generate_comic_outline_node)
+        workflow.add_node("generate_frames", self.generate_frames_node)
         workflow.add_node("design_characters", self.design_characters_node)
-        workflow.add_node("generate_story_segments", self.generate_story_segments_node)
-        workflow.add_node("generate_image_prompts", self.generate_image_prompts_node)
         workflow.add_node("generate_images", self.generate_images_node)
         workflow.add_node("finalize", self.finalize_node)
 
         # 设置入口点
         workflow.set_entry_point("init")
 
-        # 添加边（定义流程）
-        workflow.add_edge("init", "generate_comic_outline")
-        workflow.add_edge("generate_comic_outline", "design_characters")
-        workflow.add_edge("design_characters", "generate_story_segments")
-        workflow.add_edge("generate_story_segments", "generate_image_prompts")
-        workflow.add_edge("generate_image_prompts", "generate_images")
+        # 添加边（定义新流程）
+        workflow.add_edge("init", "generate_frames")
+        workflow.add_edge("generate_frames", "design_characters")
+        workflow.add_edge("design_characters", "generate_images")
         workflow.add_edge("generate_images", "finalize")
         workflow.add_edge("finalize", END)
 
@@ -81,7 +76,7 @@ class StoryCreationAgent:
     def initialize_node(self, state: AgentState) -> AgentState:
         """初始化节点 - 准备工作环境"""
         print("\n" + "=" * 50)
-        print("🚀 初始化漫画创作流程")
+        print("🚀 初始化漫画创作流程（新流程：LLM → 角色设计 → 文生图）")
         print("=" * 50)
 
         # 记录到 Episodic Memory
@@ -97,67 +92,84 @@ class StoryCreationAgent:
 
         # 设置 Profile Memory（项目偏好）
         self.memory.profile.update_settings({
-            "project_type": "comic",
-            "comic_style": "manga"
+            "project_type": "storybook",
+            "total_frames": 9
         })
 
         state["current_step"] = "初始化完成"
         state["completed_steps"] = ["init"]
         return state
 
-    def generate_comic_outline_node(self, state: AgentState) -> AgentState:
-        """生成漫画大纲节点"""
-        print("\n📝 Step 1: 生成漫画大纲")
+    def generate_frames_node(self, state: AgentState) -> AgentState:
+        """使用 LLM_conversion 生成 9 帧漫画文本和提示词节点"""
+        print("\n📝 Step 1: 使用 LLM 生成 9 帧漫画（文本+提示词）")
         print("-" * 50)
 
         try:
-            # 从 Profile Memory 获取设置
-            settings = self.memory.profile.get_profile("settings")
             memory_context = {
-                "settings": settings,
                 "project_name": state["project_name"]
             }
 
-            # 调用工具生成漫画大纲
-            outline = generate_comic_outline(state["user_input"], memory_context)
+            # 调用 LLM_conversion 工具
+            result = generate_frames_from_llm(state["user_input"], memory_context)
 
             # 更新状态
-            state["comic_outline"] = outline
-            state["current_step"] = "漫画大纲已生成"
-            state["completed_steps"] = state.get("completed_steps", []) + ["generate_comic_outline"]
+            state["character_settings"] = result.get("character_settings", "")
+            state["main_story"] = result.get("main_story", "")
+            state["story_segments"] = result.get("segments", [])
+            state["image_prompts"] = result.get("prompts", [])
+            state["current_step"] = "9帧漫画内容已生成"
+            state["completed_steps"] = state.get("completed_steps", []) + ["generate_frames"]
 
             # 保存到 Semantic Memory
-            self.memory.semantic.update_knowledge("comic_outline", outline)
+            self.memory.semantic.update_knowledge("character_settings", result.get("character_settings"))
+            self.memory.semantic.update_knowledge("main_story", result.get("main_story"))
+            self.memory.semantic.update_knowledge("story_segments", result.get("segments"))
+            self.memory.semantic.update_knowledge("image_prompts", result.get("prompts"))
 
             # 记录到 Episodic Memory
             self.memory.episodic.add_episode(
-                "outline_created",
-                outline,
-                {"title": outline.get("title"), "total_panels": outline.get("total_panels")}
+                "frames_generated",
+                result,
+                {"total_frames": result.get("total_frames", 9)}
             )
 
-            print(f"✓ 漫画标题: {outline.get('title')}")
-            print(f"✓ 漫画风格: {outline.get('style')}")
-            print(f"✓ 预计格数: {outline.get('total_panels')}")
+            print(f"✓ 角色设定: {result.get('character_settings', '')[:60]}...")
+            print(f"✓ 故事概要: {result.get('main_story', '')[:60]}...")
+            print(f"✓ 生成帧数: {len(result.get('segments', []))}")
 
         except Exception as e:
-            state["error_message"] = f"生成大纲失败: {str(e)}"
+            state["error_message"] = f"生成帧内容失败: {str(e)}"
             print(f"✗ 错误: {state['error_message']}")
 
         return state
 
     def design_characters_node(self, state: AgentState) -> AgentState:
-        """设计角色形象节点"""
-        print("\n🎭 Step 2: 设计角色形象")
+        """设计角色详细形象节点（基于 LLM 返回的角色设定）"""
+        print("\n🎭 Step 2: 设计角色详细形象")
         print("-" * 50)
 
         try:
-            outline = state.get("comic_outline")
-            if not outline:
-                raise ValueError("缺少漫画大纲")
+            character_settings = state.get("character_settings", "")
+            main_story = state.get("main_story", "")
+
+            if not character_settings:
+                print("⚠️ 没有角色设定，跳过角色设计")
+                state["characters"] = []
+                state["current_step"] = "角色设计已跳过"
+                state["completed_steps"] = state.get("completed_steps", []) + ["design_characters"]
+                return state
 
             memory_context = {
                 "project_name": state["project_name"]
+            }
+
+            # 构建简化的大纲数据（用于 design_characters 函数）
+            outline = {
+                "title": state["project_name"],
+                "theme": "温馨故事",
+                "plot_outline": main_story,
+                "character_settings": character_settings
             }
 
             # 调用工具设计角色
@@ -188,99 +200,9 @@ class StoryCreationAgent:
 
         return state
 
-    def generate_story_segments_node(self, state: AgentState) -> AgentState:
-        """生成分段故事文本节点"""
-        print("\n📖 Step 3: 生成分段故事文本")
-        print("-" * 50)
-
-        try:
-            outline = state.get("comic_outline")
-            characters = state.get("characters")
-
-            if not outline or not characters:
-                raise ValueError("缺少必要的前置内容")
-
-            memory_context = {
-                "project_name": state["project_name"]
-            }
-
-            # 调用工具生成分段文本
-            segments = generate_story_segments(outline, characters, memory_context)
-
-            # 更新状态
-            state["story_segments"] = segments
-            state["current_step"] = "分段故事文本已生成"
-            state["completed_steps"] = state.get("completed_steps", []) + ["generate_story_segments"]
-
-            # 保存到 Semantic Memory
-            self.memory.semantic.update_knowledge("story_segments", segments)
-
-            # 记录到 Episodic Memory
-            self.memory.episodic.add_episode(
-                "segments_generated",
-                segments,
-                {"segment_count": len(segments)}
-            )
-
-            print(f"✓ 生成文本段数: {len(segments)}")
-            for i, seg in enumerate(segments, 1):
-                print(f"  [{i}] {seg.get('text', '')[:50]}...")
-
-        except Exception as e:
-            state["error_message"] = f"生成文本失败: {str(e)}"
-            print(f"✗ 错误: {state['error_message']}")
-
-        return state
-
-    def generate_image_prompts_node(self, state: AgentState) -> AgentState:
-        """生成图片提示词节点"""
-        print("\n🎨 Step 4: 生成图片提示词")
-        print("-" * 50)
-
-        try:
-            segments = state.get("story_segments", [])
-            characters = state.get("characters", [])
-            outline = state.get("comic_outline", {})
-
-            if not segments:
-                raise ValueError("缺少故事文本段")
-
-            memory_context = {
-                "project_name": state["project_name"],
-                "comic_style": outline.get("style", "manga")
-            }
-
-            # 调用工具生成图片提示词
-            prompts = generate_image_prompts(segments, characters, outline, memory_context)
-
-            # 更新状态
-            state["image_prompts"] = prompts
-            state["current_step"] = "图片提示词已生成"
-            state["completed_steps"] = state.get("completed_steps", []) + ["generate_image_prompts"]
-
-            # 保存到 Semantic Memory
-            self.memory.semantic.update_knowledge("image_prompts", prompts)
-
-            # 记录到 Episodic Memory
-            self.memory.episodic.add_episode(
-                "prompts_generated",
-                prompts,
-                {"prompt_count": len(prompts)}
-            )
-
-            print(f"✓ 生成提示词数量: {len(prompts)}")
-            for i, prompt_data in enumerate(prompts, 1):
-                print(f"  [{i}] Panel {prompt_data.get('panel_id')}: {prompt_data.get('positive_prompt', '')[:60]}...")
-
-        except Exception as e:
-            state["error_message"] = f"生成提示词失败: {str(e)}"
-            print(f"✗ 错误: {state['error_message']}")
-
-        return state
-
     def generate_images_node(self, state: AgentState) -> AgentState:
         """生成漫画图片节点"""
-        print("\n🖼️  Step 5: 生成漫画图片")
+        print("\n🖼️  Step 3: 生成漫画图片（9帧）")
         print("-" * 50)
 
         try:
@@ -323,7 +245,7 @@ class StoryCreationAgent:
 
     def finalize_node(self, state: AgentState) -> AgentState:
         """完成节点 - 整理和保存结果"""
-        print("\n✅ Step 6: 完成漫画创作流程")
+        print("\n✅ Step 4: 完成漫画创作流程")
         print("-" * 50)
 
         # 更新 Working Memory
@@ -335,8 +257,8 @@ class StoryCreationAgent:
             "workflow_completed",
             {
                 "completed_steps": state.get("completed_steps", []),
-                "comic_title": state.get("comic_outline", {}).get("title"),
-                "total_panels": len(state.get("story_segments", [])),
+                "main_story": state.get("main_story", ""),
+                "total_frames": len(state.get("story_segments", [])),
                 "total_images": len(state.get("images", []))
             }
         )
@@ -349,7 +271,7 @@ class StoryCreationAgent:
 
         print(f"✓ 项目已保存到: memory_storage/{state['project_name']}.json")
         print(f"✓ 完成步骤: {len(state.get('completed_steps', []))}")
-        print(f"✓ 生成格数: {len(state.get('story_segments', []))}")
+        print(f"✓ 生成帧数: {len(state.get('story_segments', []))}")
         print(f"✓ 生成图片: {len(state.get('images', []))}")
 
         return state
@@ -371,7 +293,8 @@ class StoryCreationAgent:
             "user_input": user_input,
             "current_step": "starting",
             "completed_steps": [],
-            "comic_outline": {},
+            "character_settings": "",
+            "main_story": "",
             "characters": [],
             "story_segments": [],
             "image_prompts": [],
@@ -424,12 +347,10 @@ class StoryCreationAgent:
     def get_workflow_summary(self) -> str:
         """获取工作流摘要"""
         return """
-漫画创作流程节点：
+漫画创作流程节点（新版本 - 使用 LLM_conversion）：
 1. init - 初始化
-2. generate_comic_outline - 生成漫画大纲
-3. design_characters - 设计角色形象
-4. generate_story_segments - 生成分段故事文本
-5. generate_image_prompts - 生成图片提示词
-6. generate_images - 生成漫画图片
-7. finalize - 完成并保存
+2. generate_frames - 使用LLM生成9帧文本+提示词（一次性）
+3. design_characters - 设计角色详细形象
+4. generate_images - 生成漫画图片（9帧）
+5. finalize - 完成并保存
         """.strip()

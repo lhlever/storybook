@@ -13,9 +13,11 @@ import time
 import json
 import os
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from llm_client import get_llm_client
 from image_client import get_image_client
 from config import get_config
+from LLM_conversion import generate_story_data
 
 
 def call_llm(prompt: str, task_type: str, system_prompt: Optional[str] = None) -> str:
@@ -377,7 +379,7 @@ def generate_images_from_prompts(
     memory_context: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
     """
-    从提示词生成图片（直接返回 URL，不下载）
+    从提示词生成图片（并行生成，直接返回 URL，不下载）
 
     Args:
         prompts: 图片提示词列表
@@ -403,16 +405,19 @@ def generate_images_from_prompts(
             })
             print(f"  ✓ [模拟] Panel {panel_id}: https://mock.example.com/comic_panel_{panel_id}.png")
     else:
-        # 真实模式：调用图片生成 API，直接返回 URL
+        # 真实模式：并行调用图片生成 API
         image_client = get_image_client()
 
-        for prompt_data in prompts:
+        print(f"\n🚀 并行生成 {len(prompts)} 张图片...")
+
+        def generate_single_image(prompt_data: Dict[str, Any]) -> Dict[str, Any]:
+            """生成单张图片的工作函数"""
             panel_id = prompt_data.get("panel_id")
             positive_prompt = prompt_data.get("positive_prompt", "")
             negative_prompt = prompt_data.get("negative_prompt", "")
 
             try:
-                print(f"\n  🎨 生成 Panel {panel_id} 图片...")
+                print(f"  🎨 [开始] Panel {panel_id}")
 
                 # 调用图片生成 API，获取 URL
                 image_url = image_client.generate(
@@ -420,24 +425,55 @@ def generate_images_from_prompts(
                     negative_prompt=negative_prompt
                 )
 
-                images.append({
+                print(f"  ✓ [完成] Panel {panel_id}: {image_url}")
+
+                return {
                     "panel_id": panel_id,
                     "image_url": image_url,
                     "prompt": positive_prompt,
                     "status": "generated"
-                })
-
-                print(f"  ✓ Panel {panel_id}: {image_url}")
+                }
 
             except Exception as e:
-                print(f"  ✗ Panel {panel_id} 生成失败: {e}")
-                images.append({
+                print(f"  ✗ [失败] Panel {panel_id}: {e}")
+                return {
                     "panel_id": panel_id,
                     "image_url": "",
                     "prompt": positive_prompt,
                     "status": "failed",
                     "error": str(e)
-                })
+                }
+
+        # 使用线程池并行生成（最多同时 5 个任务）
+        max_workers = min(5, len(prompts))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有任务
+            future_to_prompt = {
+                executor.submit(generate_single_image, prompt_data): prompt_data
+                for prompt_data in prompts
+            }
+
+            # 收集结果
+            for future in as_completed(future_to_prompt):
+                try:
+                    result = future.result()
+                    images.append(result)
+                except Exception as e:
+                    prompt_data = future_to_prompt[future]
+                    panel_id = prompt_data.get("panel_id")
+                    print(f"  ✗ [异常] Panel {panel_id}: {e}")
+                    images.append({
+                        "panel_id": panel_id,
+                        "image_url": "",
+                        "prompt": prompt_data.get("positive_prompt", ""),
+                        "status": "failed",
+                        "error": str(e)
+                    })
+
+        # 按 panel_id 排序
+        images.sort(key=lambda x: x.get("panel_id", 0))
+
+        print(f"\n✅ 并行生成完成！成功: {sum(1 for img in images if img['status'] == 'generated')}/{len(images)}")
 
     return images
 
@@ -461,12 +497,103 @@ def download_image(url: str, save_path: str) -> None:
         raise
 
 
+def generate_frames_from_llm(user_input: str, memory_context: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    使用 LLM_conversion 生成 9 帧漫画的文本和提示词（一次性请求）
+
+    Args:
+        user_input: 用户输入的漫画创意
+        memory_context: Memory 上下文
+
+    Returns:
+        包含 character_settings, main_story, frames 的字典
+    """
+    print(f"\n[LLM Conversion] 正在生成 9 帧漫画...")
+
+    try:
+        # 调用 LLM_conversion.py 的核心函数
+        story_data = generate_story_data(user_input)
+
+        # 验证数据结构
+        frames = story_data.get("frames", [])
+        if len(frames) != 9:
+            print(f"⚠️ 返回的帧数不是 9 ({len(frames)}帧)，请检查")
+
+        print(f"✓ 角色设定: {story_data.get('character_settings', '')[:50]}...")
+        print(f"✓ 故事概要: {story_data.get('main_story', '')[:50]}...")
+        print(f"✓ 生成帧数: {len(frames)}")
+
+        # 转换为标准格式
+        result = {
+            "character_settings": story_data.get("character_settings", ""),
+            "main_story": story_data.get("main_story", ""),
+            "total_frames": len(frames),
+            "segments": [],  # 文本段
+            "prompts": []    # 图片提示词
+        }
+
+        # 解析每一帧
+        for frame in frames:
+            frame_index = frame.get("frame_index", 0)
+            scene_desc = frame.get("scene_description", "")
+            visual_prompt = frame.get("visual_prompt", "")
+
+            # 添加文本段
+            result["segments"].append({
+                "panel_id": frame_index,
+                "scene_description": scene_desc,
+                "text": scene_desc,
+                "characters_in_scene": [],
+                "dialogue": "",
+                "action": scene_desc,
+                "emotion": "温馨"
+            })
+
+            # 添加图片提示词
+            result["prompts"].append({
+                "panel_id": frame_index,
+                "positive_prompt": visual_prompt,
+                "negative_prompt": "blurry, low quality, distorted, bad anatomy, text, watermark",
+                "style_tags": ["storybook", "high_quality"]
+            })
+
+        return result
+
+    except Exception as e:
+        print(f"✗ LLM Conversion 失败: {e}")
+        # 返回默认结构（9帧）
+        return {
+            "character_settings": "默认角色设定",
+            "main_story": user_input,
+            "total_frames": 9,
+            "segments": [
+                {
+                    "panel_id": i,
+                    "scene_description": f"第{i}帧场景",
+                    "text": f"第{i}帧场景",
+                    "characters_in_scene": [],
+                    "dialogue": "",
+                    "action": f"第{i}帧场景",
+                    "emotion": "温馨"
+                }
+                for i in range(1, 10)
+            ],
+            "prompts": [
+                {
+                    "panel_id": i,
+                    "positive_prompt": f"Frame {i}, warm scene, high quality, detailed",
+                    "negative_prompt": "blurry, low quality, distorted, bad anatomy",
+                    "style_tags": ["storybook", "high_quality"]
+                }
+                for i in range(1, 10)
+            ]
+        }
+
+
 def list_available_tools() -> List[str]:
     """列出所有可用的工具"""
     return [
-        "generate_comic_outline - 生成漫画大纲",
+        "generate_frames_from_llm - 使用LLM生成9帧文本+提示词",
         "design_characters - 设计角色形象",
-        "generate_story_segments - 生成分段故事文本",
-        "generate_image_prompts - 生成图片提示词",
         "generate_images_from_prompts - 文生图"
     ]
