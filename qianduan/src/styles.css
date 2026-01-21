@@ -362,6 +362,12 @@ body {
   line-height: 1.6;
 }
 
+.bubble p {
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
 .bubble-label {
   display: inline-block;
   font-size: 11px;

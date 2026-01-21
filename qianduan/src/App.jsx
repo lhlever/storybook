@@ -13,6 +13,10 @@ export const App = () => {
   const [inputValue, setInputValue] = useState("");
   const [loading, setLoading] = useState(false);
   const [showDialog, setShowDialog] = useState(true);
+  // 漫画图片数组，初始为默认的静态图片
+  const [comicImages, setComicImages] = useState(
+    Array.from({ length: 9 }, (_, index) => `/resource/IMG_${index + 1}.jpg`)
+  );
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -56,12 +60,35 @@ export const App = () => {
 
       const data = await response.json();
       
+      // 判断是否包含漫画图片：只有当返回明确包含9张图片时才更新展示区
+      const hasComicImages = data.images && 
+                            Array.isArray(data.images) && 
+                            data.images.length === 9;
+      
+      if (hasComicImages) {
+        // 有漫画时：更新右侧漫画展示区域的图片
+        setComicImages(data.images);
+      }
+      // 没有漫画时：不做任何操作，保持展示区原有图片不变
+      
+      // 构建助手回复内容：包含文字信息和漫画信息
+      let assistantContent = data.response || data.message || "抱歉，我暂时无法回复。";
+      
+      // 只有当有漫画时才添加漫画相关的提示信息
+      if (hasComicImages) {
+        if (data.comic_info) {
+          assistantContent += `\n\n📖 漫画信息：${data.comic_info}`;
+        } else {
+          assistantContent += `\n\n✨ 已生成 9 张漫画图片，请查看右侧展示区。`;
+        }
+      }
+      
       // 添加助手回复
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          content: data.response || data.message || "抱歉，我暂时无法回复。"
+          content: assistantContent
         }
       ]);
     } catch (error) {
@@ -95,6 +122,10 @@ export const App = () => {
         content: "对话已清空，让我们重新开始吧！"
       }
     ]);
+    // 重置为默认图片
+    setComicImages(
+      Array.from({ length: 9 }, (_, index) => `/resource/IMG_${index + 1}.jpg`)
+    );
   };
 
   return (
@@ -171,18 +202,22 @@ export const App = () => {
             </div>
           </section>
 
-          {/* 右侧：独立展示区（与左侧无关，预留静态资源） */}
+          {/* 右侧：漫画展示区 */}
           {showDialog && (
             <section className="storybook-panel storybook-panel--dialog">
-              <h2 className="dialog-title">展示样例</h2>
+              <h2 className="dialog-title">漫画展示</h2>
 
               <div className="display-grid display-grid--nine">
-                {Array.from({ length: 9 }).map((_, index) => (
+                {comicImages.map((imageSrc, index) => (
                   <div key={index} className="display-card display-card--comic">
                     <img
-                      src={`/resource/IMG_${index + 1}.jpg`}
+                      src={imageSrc}
                       alt={`分镜 ${index + 1}`}
                       className="display-card-image"
+                      onError={(e) => {
+                        // 如果图片加载失败，显示默认图片
+                        e.target.src = `/resource/IMG_${index + 1}.jpg`;
+                      }}
                     />
                   </div>
                 ))}
