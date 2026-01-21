@@ -24,123 +24,6 @@ export const App = () => {
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
-  // 将文字叠加到图片上的函数：上面文字，下面图片，白色背景
-  const overlayTextOnImage = async (imageUrl, text) => {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.crossOrigin = "anonymous"; // 处理跨域问题
-      
-      img.onload = () => {
-        // 创建canvas
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-        
-        // 设置文字样式（先设置才能测量文字高度）
-        const fontSize = Math.max(img.width * 0.04, 20); // 根据图片宽度动态调整字体大小
-        ctx.font = `bold ${fontSize}px sans-serif`;
-        ctx.fillStyle = "#000000"; // 黑色文字
-        ctx.textAlign = "center";
-        ctx.textBaseline = "top";
-        
-        // 计算文字区域高度
-        const maxWidth = img.width * 0.9; // 最大宽度为图片宽度的90%
-        const lineHeight = fontSize * 0.8; // 行间距
-        const padding = 20; // 文字区域上下内边距
-        
-        // 处理文字换行，计算需要的行数和总高度
-        const words = text.split("");
-        let line = "";
-        let lines = [];
-        
-        for (let i = 0; i < words.length; i++) {
-          const testLine = line + words[i];
-          const metrics = ctx.measureText(testLine);
-          
-          if (metrics.width > maxWidth && i > 0) {
-            lines.push(line);
-            line = words[i];
-          } else {
-            line = testLine;
-          }
-        }
-        if (line) {
-          lines.push(line);
-        }
-        
-        // 计算文字区域总高度
-        const textHeight = lines.length * lineHeight + padding * 2;
-        
-        // 设置canvas尺寸：宽度与图片一致，高度为文字高度+图片高度
-        canvas.width = img.width;
-        canvas.height = img.height + textHeight;
-        
-        // 填充白色背景
-        ctx.fillStyle = "#FFFFFF";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        // 绘制文字（在画布上方）
-        ctx.fillStyle = "#000000"; // 黑色文字
-        const textX = canvas.width / 2;
-        const textY = padding;
-        
-        lines.forEach((line, index) => {
-          ctx.fillText(line, textX, textY + index * lineHeight);
-        });
-        
-        // 绘制图片（在文字下方）
-        ctx.drawImage(img, 0, textHeight);
-        
-        // 将canvas转换为图片URL
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
-        resolve(dataUrl);
-      };
-      
-      img.onerror = () => {
-        reject(new Error("图片加载失败"));
-      };
-      
-      img.src = imageUrl;
-    });
-  };
-
-  // 批量处理图片和文字，生成合成图片
-  const processComicImages = async (imageDataArray) => {
-    try {
-      const processedImages = await Promise.all(
-        imageDataArray.map((item, index) => {
-          if (typeof item === "string") {
-            // 如果是字符串，说明是默认图片URL，直接返回
-            return item;
-          } else if (item.word && item.url && item.url.url) {
-            // 如果有word和url对象（其中url字段是真正的图片地址），合成图片
-            return overlayTextOnImage(item.url.url, item.word).catch((error) => {
-              console.error(`处理图片 ${index + 1} 失败:`, error);
-              // 失败时返回原始URL
-              return item.url.url;
-            });
-          } else {
-            // 其他情况，返回原始URL或默认图片
-            const fallbackUrl =
-              typeof item.url === "string"
-                ? item.url
-                : item.url?.url || `/resource/IMG_${index + 1}.jpg`;
-            return fallbackUrl;
-          }
-        })
-      );
-      return processedImages;
-    } catch (error) {
-      console.error("处理图片失败:", error);
-      return imageDataArray.map((item, index) => 
-        typeof item === "string"
-          ? item
-          : (typeof item.url === "string"
-              ? item.url
-              : item.url?.url || `/resource/IMG_${index + 1}.jpg`)
-      );
-    }
-  };
-
   // 自动滚动到底部
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -197,13 +80,14 @@ export const App = () => {
         imagesData.every((item) => item.word && item.url && item.url.url);
       
       if (hasComicImages) {
-        // 有漫画时：处理图片和文字合成，然后更新右侧漫画展示区域
+        // 有漫画时：直接使用后端返回的图片地址和文字，不再进行Canvas合成
         // 如果返回的数量不是 9 条，也照样展示（展示返回的所有分镜）
-        const processedImages = await processComicImages(imagesData);
-        // 将合成后的图片URL与对应的 word 绑定起来
-        const imagesWithWord = processedImages.map((url, index) => ({
-          src: url,
-          word: imagesData[index]?.word || null
+        const imagesWithWord = imagesData.map((item, index) => ({
+          src:
+            (item.url && typeof item.url === "string" && item.url) ||
+            (item.url && typeof item.url === "object" && item.url.url) ||
+            `/resource/IMG_${index + 1}.jpg`,
+          word: item.word || null
         }));
         setComicImages(imagesWithWord);
       }

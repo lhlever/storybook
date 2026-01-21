@@ -456,12 +456,19 @@ body {
 }
 
 .display-card-word {
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: 9px;
+  line-height: 1;
   margin-bottom: 6px;
+  padding: 4px 6px;
   color: #4b3414;
   text-align: left;
   word-break: break-word;
+  letter-spacing: 0.01em;
+  background: rgba(255, 253, 246, 0.95);
+  border: 1px solid rgba(191, 158, 98, 0.8);
+  border-radius: 6px;
+  max-height: 40px; /* 约 4 行文字高度 */
+  overflow-y: auto;
 }
 
 .display-card-title {
